@@ -80,6 +80,24 @@ Cada vez que cambies algo en GitHub, Vercel vuelve a publicar solo.
 
 ---
 
+## 📮 Detalle por código postal (zoom a la ciudad)
+
+Si tu base tiene una columna de **código postal**, el tablero la detecta sola
+(busca encabezados tipo `codigo_postal`, `CP`, `zip`, etc.). Entonces:
+
+- En los KPIs ves cuántas matrículas tienen CP cargado.
+- Al hacer **clic en un estado** (en el mapa o en la tabla), el mapa hace
+  **zoom** y muestra **burbujas que agrupan los códigos postales por cercanía**.
+  Cada burbuja está etiquetada con la alcaldía/municipio dominante y su tamaño
+  es proporcional a la cantidad de matrículas.
+- **CDMX y Estado de México se interpretan como una sola ciudad** (el "Valle de
+  México"), porque su zona metropolitana es continua.
+- Si una celda trae varios códigos ("06000, 06010"), toma el primero.
+
+> Nota: en tu base actual la columna `codigo_postal` viene **vacía** (el export
+> de órdenes no la traía). Cuando completes esos datos, la función se activa
+> sola — no hay que tocar nada.
+
 ## 🧩 ¿Y si cambia tu base de datos?
 
 No hace falta tocar nada: entrás a tu tablero (local o en Vercel) y cargás el
@@ -98,3 +116,13 @@ en la columna `provincia` de ese registro.
 - El mapa es un GeoJSON de los 32 estados (`public/mexico-estados.json`)
   proyectado con `d3-geo`.
 - La normalización de estados vive en `src/estados.js`.
+- El detalle por CP usa `public/cp-coords.json` (36.172 códigos postales con su
+  centroide lat/lng), y la lógica de extracción y agrupamiento por cercanía está
+  en `src/cp.js`.
+
+### Créditos de datos
+
+- Coordenadas de códigos postales: dataset "CP-MEX-2025" de
+  [adrianrg.com](https://adrianrg.com/dataset-codigos-postales-de-mexico-con-coordenadas-2025/),
+  publicado bajo licencia **CC0 1.0** (dominio público).
+- Mapa de estados: GeoJSON de México (repositorio público `angelnmara/geojson`).

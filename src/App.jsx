@@ -2,21 +2,31 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import Mapa from './Mapa.jsx'
 import { normalizarEstado, SIN_DATO } from './estados.js'
+import { detectarColumnasCP, extraerCP, agrupar } from './cp.js'
 
-// Lee el archivo Excel/CSV y devuelve las filas de la hoja de matrículas.
+// Ciudades que se interpretan como una sola (misma zona metropolitana).
+// CDMX y Estado de México forman el Valle de México.
+const MERGE = { 'Ciudad de México': 'valle', México: 'valle' }
+const GRUPOS = {
+  valle: {
+    titulo: 'Valle de México (CDMX + Edo. de México)',
+    estados: ['Ciudad de México', 'México'],
+  },
+}
+function grupoDe(estado) {
+  const g = MERGE[estado]
+  return g ? GRUPOS[g] : { titulo: estado, estados: [estado] }
+}
+
 function leerArchivo(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
         const wb = XLSX.read(e.target.result, { type: 'array' })
-        // Preferimos una hoja llamada "Matriculas"; si no, la primera.
         const nombreHoja =
           wb.SheetNames.find((n) => /matricul/i.test(n)) || wb.SheetNames[0]
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], {
-          defval: null,
-        })
-        resolve(rows)
+        resolve(XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { defval: null }))
       } catch (err) {
         reject(err)
       }
@@ -26,12 +36,10 @@ function leerArchivo(file) {
   })
 }
 
-// Detecta la columna de estado disponible en las filas.
 function detectarColumnaEstado(rows) {
   if (!rows.length) return null
   const cols = Object.keys(rows[0])
-  const candidatas = ['provincia', 'estado', 'estado_facturacion']
-  for (const c of candidatas) {
+  for (const c of ['provincia', 'estado', 'estado_facturacion']) {
     if (cols.includes(c)) return c
   }
   return cols.find((c) => /estado|provincia|entidad/i.test(c)) || null
@@ -40,44 +48,57 @@ function detectarColumnaEstado(rows) {
 const money = (n) =>
   n == null || isNaN(n)
     ? '—'
-    : n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 })
+    : n.toLocaleString('es-MX', {
+        style: 'currency',
+        currency: 'MXN',
+        maximumFractionDigits: 0,
+      })
 
 export default function App() {
   const [rows, setRows] = useState(null)
   const [nombreArchivo, setNombreArchivo] = useState('')
   const [error, setError] = useState('')
   const [colEstado, setColEstado] = useState(null)
+  const [cpCols, setCpCols] = useState([])
+  const [cpCoords, setCpCoords] = useState(null)
   const [filtroPrograma, setFiltroPrograma] = useState('Todos')
   const [filtroEstatus, setFiltroEstatus] = useState('Todos')
   const [estadoActivo, setEstadoActivo] = useState(null)
+  const [seleccion, setSeleccion] = useState(null)
   const inputRef = useRef(null)
+
+  // Carga diferida de coordenadas de CP (solo si la base trae códigos postales).
+  useEffect(() => {
+    if (cpCols.length && !cpCoords) {
+      fetch('/cp-coords.json')
+        .then((r) => r.json())
+        .then(setCpCoords)
+        .catch(() => {})
+    }
+  }, [cpCols, cpCoords])
 
   async function cargar(file) {
     if (!file) return
     setError('')
     try {
       const data = await leerArchivo(file)
-      if (!data.length) {
-        setError('El archivo no tiene filas de datos.')
-        return
-      }
+      if (!data.length) return setError('El archivo no tiene filas de datos.')
       const col = detectarColumnaEstado(data)
-      if (!col) {
-        setError('No encontré una columna de estado/provincia en el archivo.')
-        return
-      }
+      if (!col)
+        return setError('No encontré una columna de estado/provincia en el archivo.')
       setColEstado(col)
+      setCpCols(detectarColumnasCP(data))
       setRows(data)
       setNombreArchivo(file.name)
       setFiltroPrograma('Todos')
       setFiltroEstatus('Todos')
       setEstadoActivo(null)
+      setSeleccion(null)
     } catch (err) {
       setError('No pude leer el archivo: ' + err.message)
     }
   }
 
-  // Opciones de filtro derivadas de los datos.
   const opciones = useMemo(() => {
     if (!rows) return { programas: [], estatus: [] }
     const uniq = (col) =>
@@ -88,7 +109,6 @@ export default function App() {
     }
   }, [rows])
 
-  // Filas tras aplicar los filtros activos.
   const filas = useMemo(() => {
     if (!rows) return []
     return rows.filter((r) => {
@@ -98,7 +118,6 @@ export default function App() {
     })
   }, [rows, filtroPrograma, filtroEstatus])
 
-  // Agregado por estado: conteo e ingresos.
   const porEstado = useMemo(() => {
     const m = new Map()
     for (const r of filas) {
@@ -118,7 +137,44 @@ export default function App() {
     return o
   }, [porEstado])
 
-  // KPIs
+  // CPs (ya extraídos y agregados) por estado normalizado.
+  const cpsPorEstado = useMemo(() => {
+    const m = new Map()
+    if (!cpCols.length) return m
+    for (const r of filas) {
+      const cp = extraerCP(r, cpCols)
+      if (!cp) continue
+      const est = normalizarEstado(r[colEstado])
+      if (!m.has(est)) m.set(est, new Map())
+      const mm = m.get(est)
+      mm.set(cp, (mm.get(cp) || 0) + 1)
+    }
+    return m
+  }, [filas, cpCols, colEstado])
+
+  const conCP = useMemo(() => {
+    if (!cpCols.length) return 0
+    let c = 0
+    for (const r of filas) if (extraerCP(r, cpCols)) c++
+    return c
+  }, [filas, cpCols])
+
+  // Clusters para el modo ciudad (agrupados por cercanía).
+  const clusters = useMemo(() => {
+    if (!seleccion || !cpCoords) return null
+    const puntos = []
+    for (const est of seleccion.estados) {
+      const mm = cpsPorEstado.get(est)
+      if (!mm) continue
+      for (const [cp, n] of mm) {
+        const rec = cpCoords.cp[cp]
+        if (!rec) continue
+        puntos.push({ cp, n, lat: rec[0], lng: rec[1], muni: cpCoords.munis[rec[2]] })
+      }
+    }
+    return agrupar(puntos)
+  }, [seleccion, cpCoords, cpsPorEstado])
+
   const total = filas.length
   const identificadas = porEstado
     .filter((e) => e.estado !== SIN_DATO)
@@ -127,6 +183,20 @@ export default function App() {
   const estadosDistintos = porEstado.filter((e) => e.estado !== SIN_DATO).length
   const ingresoTotal = porEstado.reduce((a, b) => a + b.ingresos, 0)
   const lider = porEstado.find((e) => e.estado !== SIN_DATO)
+
+  // Estadísticas del drill actual.
+  const drillTotal = seleccion
+    ? porEstado
+        .filter((e) => seleccion.estados.includes(e.estado))
+        .reduce((a, b) => a + b.n, 0)
+    : 0
+  const drillUbicadas = clusters ? clusters.reduce((a, c) => a + c.n, 0) : 0
+  const sinUbicar = drillTotal - drillUbicadas
+
+  function abrirDrill(nombre) {
+    if (nombre === SIN_DATO) return
+    setSeleccion(grupoDe(nombre))
+  }
 
   function onDrop(e) {
     e.preventDefault()
@@ -140,8 +210,9 @@ export default function App() {
         <div>
           <h1>🗺️ Tablero de Matrículas · México</h1>
           <p className="sub">
-            Cargá tu base y mirá de qué estados vienen las matrículas. Todo se
-            procesa en tu navegador — nada se sube a internet.
+            Cargá tu base y mirá de qué estados vienen las matrículas. Hacé clic en
+            un estado para bajar a nivel de código postal. Todo se procesa en tu
+            navegador.
           </p>
         </div>
         {rows && (
@@ -171,15 +242,18 @@ export default function App() {
           <div className="drop-inner">
             <div className="drop-icon">📂</div>
             <p className="drop-title">Arrastrá tu Excel acá o hacé clic</p>
-            <p className="drop-hint">
-              Acepta .xlsx, .xls o .csv. Buscá tu archivo de matrículas.
-            </p>
+            <p className="drop-hint">Acepta .xlsx, .xls o .csv.</p>
           </div>
         </div>
       ) : (
         <>
           <div className="filtros">
-            <span className="archivo">📄 {nombreArchivo} · {rows.length} filas</span>
+            <span className="archivo">
+              📄 {nombreArchivo} · {rows.length} filas
+              {cpCols.length > 0 && (
+                <> · CP en columna «{cpCols[0]}»</>
+              )}
+            </span>
             {opciones.programas.length > 0 && (
               <label>
                 Programa
@@ -216,21 +290,38 @@ export default function App() {
             <Kpi
               label="Estado líder"
               valor={lider ? lider.estado : '—'}
-              sub={lider ? `${lider.n} matrículas (${Math.round((lider.n / total) * 100)}%)` : ''}
+              sub={
+                lider
+                  ? `${lider.n} matrículas (${Math.round((lider.n / total) * 100)}%)`
+                  : ''
+              }
             />
             <Kpi label="Ingresos (con descuento)" valor={money(ingresoTotal)} />
-            {sinDato > 0 && (
-              <Kpi label="Sin estado identificado" valor={sinDato} alerta />
+            {cpCols.length > 0 && (
+              <Kpi
+                label="Con código postal"
+                valor={`${conCP} / ${total}`}
+                sub={conCP === 0 ? 'la columna CP está vacía' : ''}
+                alerta={conCP === 0}
+              />
             )}
+            {sinDato > 0 && <Kpi label="Sin estado identificado" valor={sinDato} alerta />}
           </div>
 
           <div className="grid">
             <div className="card mapa-card">
-              <h2>Distribución geográfica</h2>
+              <h2>
+                {seleccion ? 'Detalle por código postal' : 'Distribución geográfica'}
+              </h2>
               <Mapa
                 conteos={conteoPorEstado}
                 estadoActivo={estadoActivo}
                 onHover={setEstadoActivo}
+                onSelect={abrirDrill}
+                seleccion={seleccion}
+                clusters={clusters}
+                sinUbicar={sinUbicar}
+                onBack={() => setSeleccion(null)}
               />
             </div>
 
@@ -253,10 +344,11 @@ export default function App() {
                         key={e.estado}
                         className={
                           (e.estado === estadoActivo ? 'activo ' : '') +
-                          (e.estado === SIN_DATO ? 'sindato' : '')
+                          (e.estado === SIN_DATO ? 'sindato ' : 'clickable')
                         }
                         onMouseEnter={() => setEstadoActivo(e.estado)}
                         onMouseLeave={() => setEstadoActivo(null)}
+                        onClick={() => abrirDrill(e.estado)}
                       >
                         <td>{e.estado === SIN_DATO ? '—' : i + 1}</td>
                         <td>{e.estado}</td>
@@ -272,8 +364,9 @@ export default function App() {
           </div>
 
           <p className="pie">
-            Consejo: si ves muchas en «No identificado», revisá cómo están
-            escritos los estados en esa columna del Excel.
+            {cpCols.length === 0
+              ? 'Tip: si tu base incluye una columna de código postal, el tablero la detecta sola y habilita el mapa por zonas al hacer clic en un estado.'
+              : 'Tip: hacé clic en un estado (mapa o tabla) para ver las zonas por código postal.'}
           </p>
         </>
       )}

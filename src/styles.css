@@ -202,6 +202,56 @@ h1 {
 }
 .estado-path {
   transition: fill 0.15s;
+}
+.estado-path.clickable {
+  cursor: pointer;
+}
+.estado-path.clickable:hover {
+  filter: brightness(0.94);
+}
+
+/* Drill-down (modo ciudad) */
+.drill-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.drill-titulo {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--brand);
+}
+.btn-sec.chico {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.drill-nota {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 8px 0 0;
+  line-height: 1.45;
+}
+.cluster {
+  cursor: pointer;
+  transition: fill-opacity 0.15s;
+}
+.cluster:hover {
+  fill-opacity: 0.95;
+}
+.cluster-num {
+  font-size: 11px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  fill: #fff;
+  pointer-events: none;
+}
+.tooltip-cps {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+tbody tr.clickable {
   cursor: pointer;
 }
 .estado-num {
