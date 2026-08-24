@@ -48,10 +48,28 @@ const ALIAS = {
   tijuana: 'Baja California',
 }
 
+// Abreviaturas de 2–3 letras (SAT / exports de órdenes) -> canónico.
+const ABREV = {
+  AS: 'Aguascalientes', BC: 'Baja California', BS: 'Baja California Sur',
+  CC: 'Campeche', CM: 'Ciudad de México', DF: 'Ciudad de México',
+  CH: 'Chihuahua', CS: 'Chiapas', CL: 'Colima', CO: 'Coahuila',
+  DG: 'Durango', GT: 'Guanajuato', GR: 'Guerrero', HG: 'Hidalgo',
+  JC: 'Jalisco', JA: 'Jalisco', MC: 'México', MX: 'México', MN: 'Michoacán',
+  MI: 'Michoacán', MS: 'Morelos', MO: 'Morelos', NT: 'Nayarit', NA: 'Nayarit',
+  NL: 'Nuevo León', OC: 'Oaxaca', OA: 'Oaxaca', PL: 'Puebla', PU: 'Puebla',
+  QO: 'Querétaro', QT: 'Querétaro', QR: 'Quintana Roo', SP: 'San Luis Potosí',
+  SL: 'San Luis Potosí', SR: 'Sinaloa', SI: 'Sinaloa', SO: 'Sonora',
+  TC: 'Tabasco', TB: 'Tabasco', TS: 'Tamaulipas', TM: 'Tamaulipas',
+  TL: 'Tlaxcala', VZ: 'Veracruz', VE: 'Veracruz', YN: 'Yucatán',
+  YU: 'Yucatán', ZS: 'Zacatecas', ZA: 'Zacatecas',
+}
+
 const SLUG_A_CANONICO = {}
 for (const nombre of ESTADOS_CANONICOS) SLUG_A_CANONICO[slug(nombre)] = nombre
 
 export function normalizarEstado(valor) {
+  const raw = String(valor || '').trim().toUpperCase().replace(/^MX-/, '')
+  if (ABREV[raw]) return ABREV[raw]
   const s = slug(valor)
   if (!s) return SIN_DATO
   if (ALIAS[s]) return ALIAS[s]

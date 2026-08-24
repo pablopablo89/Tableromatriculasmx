@@ -65,10 +65,24 @@ const ALIAS = {
   morona: 'Morona Santiago',
 }
 
+// Códigos ISO 3166-2:EC (exports de órdenes usan "EC-G", "EC-SD", etc.).
+const ISO_EC = {
+  'EC-A': 'Azuay', 'EC-B': 'Bolívar', 'EC-C': 'Carchi', 'EC-F': 'Cañar',
+  'EC-H': 'Chimborazo', 'EC-X': 'Cotopaxi', 'EC-O': 'El Oro',
+  'EC-E': 'Esmeraldas', 'EC-W': 'Galápagos', 'EC-G': 'Guayas',
+  'EC-I': 'Imbabura', 'EC-L': 'Loja', 'EC-R': 'Los Ríos', 'EC-M': 'Manabí',
+  'EC-S': 'Morona Santiago', 'EC-N': 'Napo', 'EC-D': 'Orellana',
+  'EC-Y': 'Pastaza', 'EC-P': 'Pichincha', 'EC-SE': 'Santa Elena',
+  'EC-SD': 'Santo Domingo', 'EC-U': 'Sucumbíos', 'EC-T': 'Tungurahua',
+  'EC-Z': 'Zamora Chinchipe',
+}
+
 const SLUG_A_CANONICO = {}
 for (const p of PROVINCIAS_CANONICAS) SLUG_A_CANONICO[slug(p)] = p
 
 export function normalizarProvincia(valor) {
+  const raw = String(valor || '').trim().toUpperCase()
+  if (ISO_EC[raw]) return ISO_EC[raw]
   const s = slug(valor)
   if (!s) return SIN_DATO
   if (SLUG_A_CANONICO[s]) return SLUG_A_CANONICO[s]

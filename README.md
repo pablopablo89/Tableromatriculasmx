@@ -17,17 +17,32 @@ ranking + ingresos, con **zoom al hacer clic** para ver el detalle por zona.
   guiones y puntos. Por ejemplo, todas estas caen en "código postal":
   `cp`, `CP`, `Código Postal`, `Cod_Post`, `C.P.`, `zip`. Lo mismo para
   provincia/estado, ciudad/cantón, precio, programa y estatus.
-- **Limpieza de nombres**: unifica acentos, mayúsculas, typos y ciudades que en
-  realidad son de otro estado/provincia (p. ej. "Monterrey" → Nuevo León,
-  "Guayaquil" → Guayas).
+- **Limpieza de nombres**: unifica acentos, mayúsculas, typos, códigos ISO y
+  abreviaturas (`EC-G` → Guayas, `VE` → Veracruz) y ciudades que en realidad son
+  de otro estado/provincia (p. ej. "Monterrey" → Nuevo León, "Guayaquil" →
+  Guayas).
+- **Ubica por ciudad — no hace falta código postal**: alcanza con que la base
+  traiga la **ciudad** (o dirección con ciudad) y la provincia/estado. El tablero
+  la ubica en el mapa. Es más confiable que el CP (menos errores de tipeo) y
+  **100% offline**: las direcciones nunca salen de tu navegador.
 - **Zoom preciso por zona**: al hacer clic en un estado/provincia, el mapa hace
   zoom y dibuja **un punto por cada zona fina**, en su ubicación real:
-  - 🇲🇽 México → por **código postal** (cada CP su punto).
-  - 🇪🇨 Ecuador → por **ciudad/cantón** (cada ciudad en su centro urbano real).
-  - Cada punto muestra su cantidad de matrículas (tamaño) y al pasar el mouse,
-    su detalle. Nada de "manchones": los puntos quedan bien divididos.
+  - 🇲🇽 México → por **municipio** (o por **código postal** si la base lo trae,
+    aún más fino).
+  - 🇪🇨 Ecuador → por **ciudad/cantón** (en su centro urbano real).
+  - Cada punto muestra su cantidad de matrículas (tamaño) y su detalle al pasar
+    el mouse. Nada de "manchones": los puntos quedan bien divididos.
 - **México**: CDMX y Estado de México se interpretan como una sola ciudad
   (Valle de México) en el zoom.
+- **Reporte PDF**: botón "Descargar PDF" que genera un informe (resumen,
+  hallazgos automáticos, mapa y ranking) en el navegador, offline. Respeta los
+  filtros activos y, si estás en el zoom de una zona, incluye su desglose.
+
+> Nota sobre el CP: **derivar el código postal exacto** desde una dirección de
+> texto libre no se puede hacer confiable y offline (requeriría un servicio de
+> geocodificación online, de pago, que además enviaría los datos a un tercero).
+> Por eso el tablero ubica por ciudad/municipio, que es el dato confiable que ya
+> traés.
 
 ---
 

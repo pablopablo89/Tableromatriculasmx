@@ -34,9 +34,13 @@ export function geocodificar(valor, indice) {
   const s = slug(bruto)
   if (!s) return null
   if (indice.has(s)) return indice.get(s)
-  // Intento por inclusión (ej. "Cantón Guayaquil", "Guayaquil - Norte")
+  // Coincidencia por palabra completa (evita falsos positivos por subcadena,
+  // p. ej. "méxico" NO debe matchear "Xico"). Ej. válidos: "Cantón Guayaquil",
+  // "Guayaquil - Norte".
+  const padded = ' ' + s + ' '
   for (const [clave, cant] of indice) {
-    if (clave.length > 3 && (s.includes(clave) || clave.includes(s))) return cant
+    if (clave.length < 4) continue
+    if (padded.includes(' ' + clave + ' ')) return cant
   }
   return null
 }

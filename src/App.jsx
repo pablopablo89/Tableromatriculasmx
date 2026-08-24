@@ -4,6 +4,7 @@ import Mapa from './Mapa.jsx'
 import { PAISES } from './paises.js'
 import { SIN_DATO, formatoMoneda } from './comun.js'
 import { detectarEnFilas, SINONIMOS } from './campos.js'
+import { generarReportePDF } from './reporte.js'
 
 function resolvePrecio(row, col) {
   if (!col || row[col] == null || row[col] === '') return 0
@@ -38,12 +39,13 @@ export default function App() {
   const [nombreArchivo, setNombreArchivo] = useState('')
   const [error, setError] = useState('')
   const [colMayor, setColMayor] = useState(null)
-  const [finoCols, setFinoCols] = useState([])
+  const [finoCols, setFinoCols] = useState(null)
   const [finoData, setFinoData] = useState(null)
   const [filtroPrograma, setFiltroPrograma] = useState('Todos')
   const [filtroEstatus, setFiltroEstatus] = useState('Todos')
   const [activo, setActivo] = useState(null)
   const [seleccion, setSeleccion] = useState(null)
+  const [generandoPdf, setGenerandoPdf] = useState(false)
   const inputRef = useRef(null)
 
   // Al cambiar de país: reiniciar todo y cargar su dataset fino.
@@ -55,9 +57,17 @@ export default function App() {
     setActivo(null)
     setFinoData(null)
     let vivo = true
-    fetch(pais.fino.dataset)
-      .then((r) => r.json())
-      .then((d) => vivo && setFinoData({ pais: pais.id, data: d }))
+    const entradas = Object.entries(pais.fino.datasets)
+    Promise.all(
+      entradas.map(([k, url]) =>
+        fetch(url)
+          .then((r) => r.json())
+          .then((d) => [k, d])
+      )
+    )
+      .then((pares) => {
+        if (vivo) setFinoData({ pais: pais.id, data: Object.fromEntries(pares) })
+      })
       .catch(() => {})
     return () => {
       vivo = false
@@ -84,7 +94,7 @@ export default function App() {
           `No encontré una columna de ${pais.unidadMayor} en el archivo.`
         )
       setColMayor(col)
-      setFinoCols(pais.fino.detectarCols(data))
+      setFinoCols(pais.fino.detectar(data))
       setRows(data)
       setNombreArchivo(file.name)
       setFiltroPrograma('Todos')
@@ -143,16 +153,18 @@ export default function App() {
     return o
   }, [porMayor])
 
+  const hayFino = finoCols ? pais.fino.hayCols(finoCols) : false
+
   const conFino = useMemo(() => {
-    if (!finoCols.length || !geocoder) return 0
+    if (!hayFino || !geocoder) return 0
     let c = 0
     for (const r of filas) if (geocoder.geocode(r, finoCols)) c++
     return c
-  }, [filas, finoCols, geocoder])
+  }, [filas, finoCols, geocoder, hayFino])
 
-  // Puntos del zoom (agrupados por unidad fina: cada CP/ciudad su propio punto).
+  // Puntos del zoom (cada CP/ciudad su propio punto, en su ubicación real).
   const puntos = useMemo(() => {
-    if (!seleccion || !geocoder || !finoCols.length) return null
+    if (!seleccion || !geocoder || !hayFino) return null
     const m = new Map()
     for (const r of filas) {
       if (!seleccion.provincias.includes(pais.normalizar(r[colMayor]))) continue
@@ -195,6 +207,31 @@ export default function App() {
   function abrirDrill(nombre) {
     if (nombre === SIN_DATO) return
     setSeleccion(pais.grupo(nombre))
+  }
+
+  async function descargarPDF() {
+    setGenerandoPdf(true)
+    try {
+      await generarReportePDF({
+        pais,
+        nombreArchivo,
+        filtros: { programa: filtroPrograma, estatus: filtroEstatus },
+        total,
+        distintos,
+        sinDato,
+        ingresoTotal,
+        tienePrecio,
+        conFino: hayFino ? conFino : null,
+        lider,
+        porMayor,
+        seleccion,
+        puntos,
+      })
+    } catch (err) {
+      setError('No pude generar el PDF: ' + err.message)
+    } finally {
+      setGenerandoPdf(false)
+    }
   }
 
   function onDrop(e) {
@@ -259,9 +296,18 @@ export default function App() {
             <button className="btn-sec" onClick={() => inputRef.current?.click()}>
               Cambiar archivo
             </button>
+            <button
+              className="btn-pdf"
+              onClick={descargarPDF}
+              disabled={generandoPdf}
+            >
+              {generandoPdf ? 'Generando…' : '📄 Descargar PDF'}
+            </button>
             <span className="archivo">
               📄 {nombreArchivo} · {rows.length} filas
-              {finoCols.length > 0 && <> · {pais.etiquetaFina} en «{finoCols[0]}»</>}
+              {hayFino && (
+                <> · {pais.etiquetaFina} en «{pais.fino.colMostrar(finoCols)}»</>
+              )}
             </span>
             {opciones.programas.length > 0 && (
               <label>
@@ -306,11 +352,11 @@ export default function App() {
             {tienePrecio && (
               <Kpi label="Ingresos" valor={formatoMoneda(ingresoTotal, pais.moneda)} />
             )}
-            {finoCols.length > 0 && (
+            {hayFino && (
               <Kpi
-                label={`Con ${pais.etiquetaFina}`}
+                label="Ubicadas en el mapa"
                 valor={`${conFino} / ${total}`}
-                sub={conFino === 0 ? 'esa columna está vacía' : ''}
+                sub={conFino === 0 ? 'no pude ubicar ninguna' : ''}
                 alerta={conFino === 0}
               />
             )}
@@ -383,8 +429,8 @@ export default function App() {
           </div>
 
           <p className="pie">
-            {finoCols.length === 0
-              ? `Tip: si tu base incluye una columna de ${pais.etiquetaFina}, el tablero la detecta sola y habilita el detalle por zonas al hacer clic.`
+            {!hayFino
+              ? `Tip: si tu base tiene una columna de ciudad, ${pais.etiquetaFina} o dirección, el tablero la detecta sola y habilita el detalle por zonas al hacer clic.`
               : `Tip: hacé clic en ${
                   pais.unidadMayor === 'estado' ? 'un estado' : 'una provincia'
                 } (mapa o tabla) para ver el detalle por ${pais.etiquetaFina}.`}

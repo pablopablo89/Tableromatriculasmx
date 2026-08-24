@@ -98,6 +98,25 @@ h1 {
   font-size: 16px;
 }
 
+.btn-pdf {
+  background: var(--brand);
+  border: 1px solid var(--brand);
+  color: #fff;
+  padding: 9px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn-pdf:hover {
+  filter: brightness(1.08);
+}
+.btn-pdf:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .error {
   background: #fee2e2;
   color: #991b1b;

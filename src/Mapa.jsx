@@ -13,6 +13,68 @@ function color(t) {
   return `rgb(${c[0]},${c[1]},${c[2]})`
 }
 
+// Ajusta una proyección Mercator a un conjunto de features usando los límites
+// PLANARES de sus coordenadas proyectadas. Es inmune al orden de vértices
+// (winding) del GeoJSON, a diferencia de fitExtent (que usa límites esféricos y
+// puede romperse con datos mal orientados).
+function ajustarProyeccion(features, w, h, pad = 30) {
+  const proj = geoMercator().scale(1).translate([0, 0])
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity
+  const each = (coord) => {
+    const p = proj(coord)
+    if (p && isFinite(p[0]) && isFinite(p[1])) {
+      if (p[0] < x0) x0 = p[0]
+      if (p[0] > x1) x1 = p[0]
+      if (p[1] < y0) y0 = p[1]
+      if (p[1] > y1) y1 = p[1]
+    }
+  }
+  const walk = (a) => {
+    if (typeof a[0] === 'number') each(a)
+    else a.forEach(walk)
+  }
+  for (const f of features) if (f.geometry) walk(f.geometry.coordinates)
+  const dx = x1 - x0,
+    dy = y1 - y0
+  if (!(dx > 0) || !(dy > 0)) return proj
+  const s = Math.min((w - 2 * pad) / dx, (h - 2 * pad) / dy)
+  return proj.scale(s).translate([(w - s * (x0 + x1)) / 2, (h - s * (y0 + y1)) / 2])
+}
+
+// Recorre los anillos (arrays de pares [lng,lat]) de una geometría sin importar
+// la profundidad de anidado ni el `type` declarado (tolera GeoJSON malformado).
+function porAnillo(node, cb) {
+  if (!Array.isArray(node)) return
+  if (Array.isArray(node[0]) && typeof node[0][0] === 'number') {
+    cb(node)
+    return
+  }
+  for (const child of node) porAnillo(child, cb)
+}
+
+// Construye el path SVG proyectando cada vértice (planar). No usa geoPath, así
+// que es inmune al winding y al anidado del GeoJSON.
+function pathPlanar(feature, proj) {
+  const g = feature.geometry
+  if (!g) return ''
+  let d = ''
+  porAnillo(g.coordinates, (ring) => {
+    let s = ''
+    let started = false
+    for (const c of ring) {
+      const p = proj(c)
+      if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue
+      s += (started ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)
+      started = true
+    }
+    if (started) d += s + 'Z'
+  })
+  return d
+}
+
 export default function Mapa({
   mapaUrl,
   propNombre,
@@ -58,16 +120,8 @@ export default function Mapa({
     if (!geo || geo === 'error' || !seleccion) return null
     const feats = geo.features.filter((f) => seleccion.provincias.includes(nombre(f)))
     if (!feats.length) return null
-    const fc = { type: 'FeatureCollection', features: feats }
-    const projection = geoMercator().fitExtent(
-      [
-        [30, 30],
-        [WIDTH - 30, HEIGHT - 30],
-      ],
-      fc
-    )
-    const path = geoPath(projection)
-    const paths = feats.map((f) => ({ nombre: nombre(f), d: path(f) }))
+    const projection = ajustarProyeccion(feats, WIDTH, HEIGHT, 30)
+    const paths = feats.map((f) => ({ nombre: nombre(f), d: pathPlanar(f, projection) }))
     const maxN = Math.max(1, ...(puntos || []).map((p) => p.n))
     const pts = (puntos || []).map((p) => {
       const xy = projection([p.lng, p.lat])
@@ -127,12 +181,31 @@ export default function Mapa({
                     onMouseLeave={() => setTooltip(null)}
                   />
                   {grande && (
-                    <text x={p.x} y={p.y} className="punto-num">
+                    <text
+                      x={p.x}
+                      y={p.y}
+                      className="punto-num"
+                      fontSize={11}
+                      fontWeight="bold"
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fill="#fff"
+                    >
                       {p.n}
                     </text>
                   )}
                   {grande && (
-                    <text x={p.x + r + 3} y={p.y + 3} className="punto-label">
+                    <text
+                      x={p.x + r + 3}
+                      y={p.y + 3}
+                      className="punto-label"
+                      fontSize={11}
+                      fontWeight="600"
+                      fill="#0f172a"
+                      stroke="#fff"
+                      strokeWidth={2.5}
+                      paintOrder="stroke"
+                    >
                       {p.label}
                     </text>
                   )}
@@ -141,8 +214,8 @@ export default function Mapa({
             })}
         </svg>
         <p className="drill-nota">
-          Cada punto es {etiquetaFina === 'código postal' ? 'un' : 'una'}{' '}
-          {etiquetaFina}, en su ubicación real · tamaño = matrículas.
+          Cada punto es una zona ({etiquetaFina}), en su ubicación real · tamaño =
+          matrículas.
           {sinUbicar > 0 && <> {sinUbicar} sin ubicar (dato faltante o no reconocido).</>}
         </p>
         {tooltip && (
@@ -208,6 +281,10 @@ export default function Mapa({
               x={p.centroid[0]}
               y={p.centroid[1]}
               className="estado-num"
+              fontSize={10}
+              fontWeight="bold"
+              textAnchor="middle"
+              dominantBaseline="central"
               fill={p.n / nacional.maxN > 0.5 ? '#fff' : '#0e7490'}
             >
               {p.n}

@@ -1,8 +1,11 @@
 // Registro de países. Cada país define su mapa, su normalización de la unidad
-// mayor (estado/provincia), y cómo geocodificar la unidad fina (CP o ciudad).
+// mayor (estado/provincia), y cómo geocodificar la unidad fina.
 //
-// Para sumar un país nuevo: agregá su GeoJSON a /public, su normalización, y un
-// objeto acá con la misma forma. El resto del tablero funciona igual.
+// La unidad fina se ubica por CIUDAD/MUNICIPIO (dato confiable que traen las
+// bases) y, en México, por CÓDIGO POSTAL cuando la base lo incluye (más fino).
+//
+// Para sumar un país: agregá su GeoJSON + su dataset de ciudades a /public, su
+// normalización, y un objeto acá con la misma forma.
 
 import { normalizarEstado } from './estados-mx.js'
 import { detectarColumnasCP, extraerCP } from './cp-mx.js'
@@ -25,7 +28,7 @@ export const PAISES = {
     propNombre: 'name',
     unidadMayor: 'estado',
     moneda: { locale: 'es-MX', currency: 'MXN' },
-    etiquetaFina: 'código postal',
+    etiquetaFina: 'CP/municipio',
     detectarColumnaMayor,
     normalizar: normalizarEstado,
 
@@ -37,24 +40,47 @@ export const PAISES = {
       return { titulo: estado, provincias: [estado] }
     },
 
-    // Unidad fina: código postal.
+    // Unidad fina: código postal (si la base lo trae) o municipio (por ciudad).
     fino: {
-      dataset: '/cp-coords.json',
-      detectarCols: (rows) => detectarColumnasCP(rows),
+      datasets: { cp: '/cp-coords.json', muni: '/mx-municipios.json' },
+      detectar: (rows) => ({
+        cp: detectarColumnasCP(rows),
+        ciudad: detectarColumnaCiudad(rows),
+      }),
+      hayCols: (c) => (c.cp && c.cp.length > 0) || !!c.ciudad,
+      colMostrar: (c) => (c.cp && c.cp.length ? c.cp[0] : c.ciudad),
       preparar(data) {
+        const idxMuni = construirIndiceCantones(data.muni)
         return {
           geocode(row, cols) {
-            const cp = extraerCP(row, cols)
-            if (!cp) return null
-            const rec = data.cp[cp]
-            if (!rec) return null
-            return {
-              key: cp,
-              label: cp,
-              subtitulo: data.munis[rec[2]],
-              lat: rec[0],
-              lng: rec[1],
+            // 1) Código postal (más preciso) si la base lo trae.
+            if (cols.cp && cols.cp.length) {
+              const cp = extraerCP(row, cols.cp)
+              if (cp) {
+                const rec = data.cp.cp[cp]
+                if (rec)
+                  return {
+                    key: 'cp:' + cp,
+                    label: cp,
+                    subtitulo: data.cp.munis[rec[2]],
+                    lat: rec[0],
+                    lng: rec[1],
+                  }
+              }
             }
+            // 2) Municipio, por el nombre de la ciudad.
+            if (cols.ciudad) {
+              const m = geocodificar(row[cols.ciudad], idxMuni)
+              if (m)
+                return {
+                  key: 'mun:' + m.n,
+                  label: m.n,
+                  subtitulo: m.provincia || '',
+                  lat: m.lat,
+                  lng: m.lng,
+                }
+            }
+            return null
           },
         }
       },
@@ -79,17 +105,16 @@ export const PAISES = {
 
     // Unidad fina: ciudad / cantón.
     fino: {
-      dataset: '/ec-cantones.json',
-      detectarCols: (rows) => {
-        const c = detectarColumnaCiudad(rows)
-        return c ? [c] : []
-      },
+      datasets: { canton: '/ec-cantones.json' },
+      detectar: (rows) => ({ ciudad: detectarColumnaCiudad(rows) }),
+      hayCols: (c) => !!c.ciudad,
+      colMostrar: (c) => c.ciudad,
       preparar(data) {
-        const indice = construirIndiceCantones(data)
+        const indice = construirIndiceCantones(data.canton)
         return {
           geocode(row, cols) {
-            if (!cols.length) return null
-            const c = geocodificar(row[cols[0]], indice)
+            if (!cols.ciudad) return null
+            const c = geocodificar(row[cols.ciudad], indice)
             if (!c) return null
             return {
               key: c.n,
