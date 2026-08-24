@@ -1,10 +1,18 @@
 # 🗺️ Tablero de Matrículas · Multipaís
 
-Tablero web para ver de qué zonas geográficas provienen las matrículas. Elegís
-el país (🇲🇽 México / 🇪🇨 Ecuador), cargás tu Excel y te arma un mapa coloreado +
-ranking + ingresos, con **zoom al hacer clic** para ver el detalle por zona.
+Tablero web con **dos bases embebidas** (🇲🇽 México / 🇪🇨 Ecuador). Elegís el país
+y ves el mapa coloreado + ranking + ingresos, con **zoom al hacer clic** para ver
+la concentración por dirección dentro de cada zona.
 
-**Todo se procesa en el navegador**: el Excel nunca se sube a ningún servidor.
+Las bases ya vienen geocodificadas y **sin datos personales** (solo provincia,
+ciudad, coordenadas —redondeadas a ~110 m—, código postal y monto). Están en
+`public/base-mx.json` y `public/base-ec.json`.
+
+## 🔄 Cómo actualizar los datos
+
+No hay carga de archivos en la app. Para actualizar, reemplazá el JSON de la
+base correspondiente en `public/` (mismas columnas) y volvé a publicar. En la
+práctica: pasás la base nueva y se regenera el JSON limpio + geocodificado.
 
 ---
 
