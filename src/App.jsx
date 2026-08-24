@@ -1,33 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
+import { useEffect, useMemo, useState } from 'react'
 import Mapa from './Mapa.jsx'
 import { PAISES } from './paises.js'
 import { SIN_DATO, formatoMoneda } from './comun.js'
 import { detectarEnFilas, SINONIMOS } from './campos.js'
 import { generarReportePDF } from './reporte.js'
-import { cargarGoogleMaps, geocodeDirecciones, puedeGeocodificar } from './geocodeGoogle.js'
 
 function resolvePrecio(row, col) {
   if (!col || row[col] == null || row[col] === '') return 0
   const v = Number(row[col])
   return isNaN(v) ? 0 : v
-}
-
-function leerArchivo(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type: 'array' })
-        const hoja = wb.SheetNames.find((n) => /matricul/i.test(n)) || wb.SheetNames[0]
-        resolve(XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null }))
-      } catch (err) {
-        reject(err)
-      }
-    }
-    reader.onerror = reject
-    reader.readAsArrayBuffer(file)
-  })
 }
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -47,21 +28,8 @@ export default function App() {
   const [activo, setActivo] = useState(null)
   const [seleccion, setSeleccion] = useState(null)
   const [generandoPdf, setGenerandoPdf] = useState(false)
-  const [apiKey, setApiKey] = useState(() => {
-    try {
-      return localStorage.getItem('googleApiKey') || ''
-    } catch {
-      return ''
-    }
-  })
-  const [panelKey, setPanelKey] = useState(false)
-  const [keyInput, setKeyInput] = useState('')
-  const [geoProg, setGeoProg] = useState(null)
-  const [geoErr, setGeoErr] = useState('')
-  const [geoRows, setGeoRows] = useState(null)
-  const inputRef = useRef(null)
 
-  // Al cambiar de país: reiniciar todo y cargar su dataset fino.
+  // Al cambiar de país: reiniciar, cargar su dataset fino y su BASE embebida.
   useEffect(() => {
     setRows(null)
     setNombreArchivo('')
@@ -69,9 +37,8 @@ export default function App() {
     setSeleccion(null)
     setActivo(null)
     setFinoData(null)
-    setGeoProg(null)
-    setGeoErr('')
-    setGeoRows(null)
+    setFiltroPrograma('Todos')
+    setFiltroEstatus('Todos')
     let vivo = true
     const entradas = Object.entries(pais.fino.datasets)
     Promise.all(
@@ -85,6 +52,18 @@ export default function App() {
         if (vivo) setFinoData({ pais: pais.id, data: Object.fromEntries(pares) })
       })
       .catch(() => {})
+    // Base embebida del país (ya geocodificada, sin datos personales).
+    fetch(pais.base)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!vivo) return
+        if (!data.length) return setError('La base está vacía.')
+        setColMayor(pais.detectarColumnaMayor(data))
+        setFinoCols(pais.fino.detectar(data))
+        setRows(data)
+        setNombreArchivo('Base ' + pais.nombre)
+      })
+      .catch(() => vivo && setError('No pude cargar la base embebida.'))
     return () => {
       vivo = false
     }
@@ -97,33 +76,6 @@ export default function App() {
       finoData && finoData.pais === paisId ? pais.fino.preparar(finoData.data) : null,
     [finoData, paisId]
   )
-
-  async function cargar(file) {
-    if (!file) return
-    setError('')
-    try {
-      const data = await leerArchivo(file)
-      if (!data.length) return setError('El archivo no tiene filas de datos.')
-      const col = pais.detectarColumnaMayor(data)
-      if (!col)
-        return setError(
-          `No encontré una columna de ${pais.unidadMayor} en el archivo.`
-        )
-      setColMayor(col)
-      setFinoCols(pais.fino.detectar(data))
-      setRows(data)
-      setNombreArchivo(file.name)
-      setFiltroPrograma('Todos')
-      setFiltroEstatus('Todos')
-      setSeleccion(null)
-      setActivo(null)
-      setGeoProg(null)
-      setGeoErr('')
-      setGeoRows(null)
-    } catch (err) {
-      setError('No pude leer el archivo: ' + err.message)
-    }
-  }
 
   // Detección inteligente de columnas de programa, estatus y precio.
   const campos = useMemo(() => {
@@ -279,76 +231,15 @@ export default function App() {
     }
   }
 
-  function onDrop(e) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (f) cargar(f)
-  }
-
-  async function geocodificar(clave) {
-    const k = clave || apiKey
-    if (!k) {
-      setKeyInput(apiKey)
-      setPanelKey(true)
-      return
-    }
-    setGeoErr('')
-    setGeoRows(null)
-    setGeoProg({ done: 0, total: 0, ok: 0 })
-    try {
-      await cargarGoogleMaps(k)
-      const { rows: enr, stats } = await geocodeDirecciones({
-        rows,
-        codigoPais: pais.codigoPais,
-        onProgress: setGeoProg,
-      })
-      setRows(enr)
-      setGeoRows(enr)
-      setSeleccion(null)
-      setGeoProg({ ...stats, done: stats.total })
-    } catch (err) {
-      setGeoErr(err.message)
-      setGeoProg(null)
-    }
-  }
-
-  function guardarKey() {
-    const k = keyInput.trim()
-    if (!k) return
-    try {
-      localStorage.setItem('googleApiKey', k)
-    } catch {}
-    setApiKey(k)
-    setPanelKey(false)
-    geocodificar(k)
-  }
-
-  function descargarBaseGeocodificada() {
-    if (!geoRows) return
-    const ws = XLSX.utils.json_to_sheet(geoRows)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Matriculas')
-    const csv = XLSX.write(wb, { type: 'array', bookType: 'csv' })
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = (nombreArchivo.replace(/\.[^.]+$/, '') || 'base') + '_geocodificado.csv'
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const puedeGeo = rows && !modoCoord && puedeGeocodificar(rows)
-
   return (
     <div className="app">
       <header className="topbar">
         <div>
           <h1>🗺️ Tablero de Matrículas</h1>
           <p className="sub">
-            Elegí el país, cargá tu base y mirá de qué zonas vienen las
-            matrículas. Hacé clic en {pais.unidadMayor === 'estado' ? 'un' : 'una'}{' '}
-            {pais.unidadMayor} para bajar a nivel de {pais.etiquetaFina}. Todo se
-            procesa en tu navegador.
+            Elegí el país y mirá de qué zonas vienen las matrículas. Hacé clic en{' '}
+            {pais.unidadMayor === 'estado' ? 'un' : 'una'} {pais.unidadMayor} para
+            bajar al detalle por dirección.
           </p>
         </div>
         <div className="pais-sel">
@@ -364,37 +255,13 @@ export default function App() {
         </div>
       </header>
 
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".xlsx,.xls,.csv"
-        style={{ display: 'none' }}
-        onChange={(e) => cargar(e.target.files?.[0])}
-      />
-
       {error && <div className="error">{error}</div>}
 
       {!rows ? (
-        <div
-          className="dropzone"
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={onDrop}
-        >
-          <div className="drop-inner">
-            <div className="drop-icon">📂</div>
-            <p className="drop-title">
-              Arrastrá tu Excel de {pais.bandera} {pais.nombre} o hacé clic
-            </p>
-            <p className="drop-hint">Acepta .xlsx, .xls o .csv.</p>
-          </div>
-        </div>
+        <div className="mapa-loading">Cargando base de {pais.nombre}…</div>
       ) : (
         <>
           <div className="filtros">
-            <button className="btn-sec" onClick={() => inputRef.current?.click()}>
-              Cambiar archivo
-            </button>
             <button
               className="btn-pdf"
               onClick={descargarPDF}
@@ -402,22 +269,6 @@ export default function App() {
             >
               {generandoPdf ? 'Generando…' : '📄 Descargar PDF'}
             </button>
-            {puedeGeo && (
-              <button
-                className="btn-geo"
-                onClick={() => geocodificar()}
-                disabled={!!geoProg && geoProg.done < geoProg.total}
-              >
-                {geoProg && geoProg.done < geoProg.total
-                  ? `🌐 Geocodificando… ${geoProg.done}/${geoProg.total}`
-                  : '🌐 Geocodificar direcciones'}
-              </button>
-            )}
-            {geoRows && (
-              <button className="btn-sec" onClick={descargarBaseGeocodificada}>
-                ⬇️ Descargar base geocodificada
-              </button>
-            )}
             <span className="archivo">
               📄 {nombreArchivo} · {rows.length} filas
               {modoCoord ? (
@@ -457,43 +308,6 @@ export default function App() {
               </label>
             )}
           </div>
-
-          {panelKey && (
-            <div className="geo-panel">
-              <div className="geo-panel-titulo">Pegá tu API key de Google Maps</div>
-              <p className="geo-panel-sub">
-                Se guarda solo en este navegador. Las direcciones van directo de acá a
-                Google (nunca a otro servidor).
-              </p>
-              <div className="geo-panel-fila">
-                <input
-                  type="password"
-                  className="geo-input"
-                  placeholder="AIza..."
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && guardarKey()}
-                />
-                <button className="btn-geo" onClick={guardarKey}>
-                  Guardar y geocodificar
-                </button>
-                <button className="btn-sec" onClick={() => setPanelKey(false)}>
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          )}
-
-          {geoErr && <div className="error">Geocodificación: {geoErr}</div>}
-          {geoProg && (
-            <div className="geo-status">
-              {geoProg.done < geoProg.total ? (
-                <>Geocodificando direcciones con Google… {geoProg.done}/{geoProg.total} ({geoProg.ok} ubicadas)</>
-              ) : (
-                <>✅ Listo: {geoProg.ok} de {geoProg.total} direcciones ubicadas. El mapa ahora muestra la concentración por dirección.</>
-              )}
-            </div>
-          )}
 
           <div className="kpis">
             <Kpi label="Matrículas (filtradas)" valor={total} />
@@ -586,11 +400,9 @@ export default function App() {
           </div>
 
           <p className="pie">
-            {!hayFino
-              ? `Tip: si tu base tiene una columna de ciudad, ${pais.etiquetaFina} o dirección, el tablero la detecta sola y habilita el detalle por zonas al hacer clic.`
-              : `Tip: hacé clic en ${
-                  pais.unidadMayor === 'estado' ? 'un estado' : 'una provincia'
-                } (mapa o tabla) para ver el detalle por ${pais.etiquetaFina}.`}
+            Tip: hacé clic en{' '}
+            {pais.unidadMayor === 'estado' ? 'un estado' : 'una provincia'} (mapa o
+            tabla) para ver el detalle por dirección dentro de la zona.
           </p>
         </>
       )}
