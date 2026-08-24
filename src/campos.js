@@ -39,6 +39,12 @@ export const SINONIMOS = {
     'estatus', 'status', 'situacion', 'estado matricula',
     'estado de matricula', 'estado inscripcion', 'estado del alumno',
   ],
+  lat: ['latitud', 'lat', 'latitude', 'y'],
+  lng: ['longitud', 'lng', 'lon', 'long', 'longitude', 'x'],
+  direccion: [
+    'direccion facturacion', 'direccion', 'domicilio', 'address', 'calle',
+    'direccion completa', 'street',
+  ],
 }
 
 // Devuelve el nombre ORIGINAL de la columna que mejor matchea la lista de

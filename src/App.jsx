@@ -5,6 +5,7 @@ import { PAISES } from './paises.js'
 import { SIN_DATO, formatoMoneda } from './comun.js'
 import { detectarEnFilas, SINONIMOS } from './campos.js'
 import { generarReportePDF } from './reporte.js'
+import { cargarGoogleMaps, geocodeDirecciones, puedeGeocodificar } from './geocodeGoogle.js'
 
 function resolvePrecio(row, col) {
   if (!col || row[col] == null || row[col] === '') return 0
@@ -46,6 +47,18 @@ export default function App() {
   const [activo, setActivo] = useState(null)
   const [seleccion, setSeleccion] = useState(null)
   const [generandoPdf, setGenerandoPdf] = useState(false)
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      return localStorage.getItem('googleApiKey') || ''
+    } catch {
+      return ''
+    }
+  })
+  const [panelKey, setPanelKey] = useState(false)
+  const [keyInput, setKeyInput] = useState('')
+  const [geoProg, setGeoProg] = useState(null)
+  const [geoErr, setGeoErr] = useState('')
+  const [geoRows, setGeoRows] = useState(null)
   const inputRef = useRef(null)
 
   // Al cambiar de país: reiniciar todo y cargar su dataset fino.
@@ -56,6 +69,9 @@ export default function App() {
     setSeleccion(null)
     setActivo(null)
     setFinoData(null)
+    setGeoProg(null)
+    setGeoErr('')
+    setGeoRows(null)
     let vivo = true
     const entradas = Object.entries(pais.fino.datasets)
     Promise.all(
@@ -101,6 +117,9 @@ export default function App() {
       setFiltroEstatus('Todos')
       setSeleccion(null)
       setActivo(null)
+      setGeoProg(null)
+      setGeoErr('')
+      setGeoRows(null)
     } catch (err) {
       setError('No pude leer el archivo: ' + err.message)
     }
@@ -113,8 +132,29 @@ export default function App() {
       programa: detectarEnFilas(rows, SINONIMOS.programa),
       estatus: detectarEnFilas(rows, SINONIMOS.estatus),
       precio: detectarEnFilas(rows, SINONIMOS.precio),
+      lat: detectarEnFilas(rows, SINONIMOS.lat),
+      lng: detectarEnFilas(rows, SINONIMOS.lng),
     }
   }, [rows])
+
+  // ¿La base trae coordenadas ya geocodificadas? (máxima precisión, intra-ciudad)
+  const modoCoord = !!(campos.lat && campos.lng)
+
+  // Geocodificador unificado por fila: si la base trae coordenadas, las usa
+  // (máxima precisión); si no, cae al geocodificador del país (CP/ciudad).
+  const geocodeFila = useMemo(() => {
+    return (r) => {
+      if (modoCoord) {
+        const la = Number(r[campos.lat])
+        const lo = Number(r[campos.lng])
+        if (r[campos.lat] !== '' && r[campos.lng] !== '' && isFinite(la) && isFinite(lo)) {
+          // Agrupa por celda de ~1 km (nivel barrio) para leer la concentración.
+          return { key: la.toFixed(2) + ',' + lo.toFixed(2), label: '', subtitulo: '', lat: la, lng: lo }
+        }
+      }
+      return geocoder ? geocoder.geocode(r, finoCols) : null
+    }
+  }, [modoCoord, campos.lat, campos.lng, geocoder, finoCols])
 
   const opciones = useMemo(() => {
     if (!rows) return { programas: [], estatus: [] }
@@ -153,38 +193,43 @@ export default function App() {
     return o
   }, [porMayor])
 
-  const hayFino = finoCols ? pais.fino.hayCols(finoCols) : false
+  const hayFino = modoCoord || (finoCols ? pais.fino.hayCols(finoCols) : false)
 
   const conFino = useMemo(() => {
-    if (!hayFino || !geocoder) return 0
+    if (!hayFino) return 0
     let c = 0
-    for (const r of filas) if (geocoder.geocode(r, finoCols)) c++
+    for (const r of filas) if (geocodeFila(r)) c++
     return c
-  }, [filas, finoCols, geocoder, hayFino])
+  }, [filas, geocodeFila, hayFino])
 
-  // Puntos del zoom (cada CP/ciudad su propio punto, en su ubicación real).
+  // Puntos del zoom. Con coordenadas: bubbles por cercanía (concentración
+  // intra-ciudad). Sin coordenadas: un punto por CP/ciudad.
   const puntos = useMemo(() => {
-    if (!seleccion || !geocoder || !hayFino) return null
+    if (!seleccion || !hayFino) return null
     const m = new Map()
     for (const r of filas) {
       if (!seleccion.provincias.includes(pais.normalizar(r[colMayor]))) continue
-      const g = geocoder.geocode(r, finoCols)
+      const g = geocodeFila(r)
       if (!g) continue
       const prev =
         m.get(g.key) || {
           label: g.label,
           subtitulo: g.subtitulo,
-          lat: g.lat,
-          lng: g.lng,
+          sumLat: 0,
+          sumLng: 0,
           n: 0,
           ingresos: 0,
         }
+      prev.sumLat += g.lat
+      prev.sumLng += g.lng
       prev.n += 1
       prev.ingresos += resolvePrecio(r, campos.precio)
       m.set(g.key, prev)
     }
-    return [...m.values()].sort((a, b) => b.n - a.n)
-  }, [seleccion, geocoder, finoCols, filas, colMayor, paisId, campos])
+    return [...m.values()]
+      .map((p) => ({ ...p, lat: p.sumLat / p.n, lng: p.sumLng / p.n }))
+      .sort((a, b) => b.n - a.n)
+  }, [seleccion, geocodeFila, hayFino, filas, colMayor, paisId, campos])
 
   const total = filas.length
   const identificadas = porMayor
@@ -239,6 +284,60 @@ export default function App() {
     const f = e.dataTransfer.files?.[0]
     if (f) cargar(f)
   }
+
+  async function geocodificar(clave) {
+    const k = clave || apiKey
+    if (!k) {
+      setKeyInput(apiKey)
+      setPanelKey(true)
+      return
+    }
+    setGeoErr('')
+    setGeoRows(null)
+    setGeoProg({ done: 0, total: 0, ok: 0 })
+    try {
+      await cargarGoogleMaps(k)
+      const { rows: enr, stats } = await geocodeDirecciones({
+        rows,
+        codigoPais: pais.codigoPais,
+        onProgress: setGeoProg,
+      })
+      setRows(enr)
+      setGeoRows(enr)
+      setSeleccion(null)
+      setGeoProg({ ...stats, done: stats.total })
+    } catch (err) {
+      setGeoErr(err.message)
+      setGeoProg(null)
+    }
+  }
+
+  function guardarKey() {
+    const k = keyInput.trim()
+    if (!k) return
+    try {
+      localStorage.setItem('googleApiKey', k)
+    } catch {}
+    setApiKey(k)
+    setPanelKey(false)
+    geocodificar(k)
+  }
+
+  function descargarBaseGeocodificada() {
+    if (!geoRows) return
+    const ws = XLSX.utils.json_to_sheet(geoRows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Matriculas')
+    const csv = XLSX.write(wb, { type: 'array', bookType: 'csv' })
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = (nombreArchivo.replace(/\.[^.]+$/, '') || 'base') + '_geocodificado.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const puedeGeo = rows && !modoCoord && puedeGeocodificar(rows)
 
   return (
     <div className="app">
@@ -303,10 +402,30 @@ export default function App() {
             >
               {generandoPdf ? 'Generando…' : '📄 Descargar PDF'}
             </button>
+            {puedeGeo && (
+              <button
+                className="btn-geo"
+                onClick={() => geocodificar()}
+                disabled={!!geoProg && geoProg.done < geoProg.total}
+              >
+                {geoProg && geoProg.done < geoProg.total
+                  ? `🌐 Geocodificando… ${geoProg.done}/${geoProg.total}`
+                  : '🌐 Geocodificar direcciones'}
+              </button>
+            )}
+            {geoRows && (
+              <button className="btn-sec" onClick={descargarBaseGeocodificada}>
+                ⬇️ Descargar base geocodificada
+              </button>
+            )}
             <span className="archivo">
               📄 {nombreArchivo} · {rows.length} filas
-              {hayFino && (
-                <> · {pais.etiquetaFina} en «{pais.fino.colMostrar(finoCols)}»</>
+              {modoCoord ? (
+                <> · ubicación por dirección (coordenadas)</>
+              ) : (
+                hayFino && (
+                  <> · {pais.etiquetaFina} en «{pais.fino.colMostrar(finoCols)}»</>
+                )
               )}
             </span>
             {opciones.programas.length > 0 && (
@@ -338,6 +457,43 @@ export default function App() {
               </label>
             )}
           </div>
+
+          {panelKey && (
+            <div className="geo-panel">
+              <div className="geo-panel-titulo">Pegá tu API key de Google Maps</div>
+              <p className="geo-panel-sub">
+                Se guarda solo en este navegador. Las direcciones van directo de acá a
+                Google (nunca a otro servidor).
+              </p>
+              <div className="geo-panel-fila">
+                <input
+                  type="password"
+                  className="geo-input"
+                  placeholder="AIza..."
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && guardarKey()}
+                />
+                <button className="btn-geo" onClick={guardarKey}>
+                  Guardar y geocodificar
+                </button>
+                <button className="btn-sec" onClick={() => setPanelKey(false)}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {geoErr && <div className="error">Geocodificación: {geoErr}</div>}
+          {geoProg && (
+            <div className="geo-status">
+              {geoProg.done < geoProg.total ? (
+                <>Geocodificando direcciones con Google… {geoProg.done}/{geoProg.total} ({geoProg.ok} ubicadas)</>
+              ) : (
+                <>✅ Listo: {geoProg.ok} de {geoProg.total} direcciones ubicadas. El mapa ahora muestra la concentración por dirección.</>
+              )}
+            </div>
+          )}
 
           <div className="kpis">
             <Kpi label="Matrículas (filtradas)" valor={total} />
@@ -376,13 +532,14 @@ export default function App() {
                 mapaUrl={pais.mapa}
                 propNombre={pais.propNombre}
                 moneda={pais.moneda}
-                etiquetaFina={pais.etiquetaFina}
+                etiquetaFina={modoCoord ? 'por dirección' : pais.etiquetaFina}
                 conteos={conteos}
                 activo={activo}
                 onHover={setActivo}
                 onSelect={abrirDrill}
                 seleccion={seleccion}
                 puntos={puntos}
+                ajustarAPuntos={modoCoord}
                 sinUbicar={sinUbicar}
                 onBack={() => setSeleccion(null)}
               />

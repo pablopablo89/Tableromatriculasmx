@@ -37,6 +37,18 @@ ranking + ingresos, con **zoom al hacer clic** para ver el detalle por zona.
 - **Reporte PDF**: botón "Descargar PDF" que genera un informe (resumen,
   hallazgos automáticos, mapa y ranking) en el navegador, offline. Respeta los
   filtros activos y, si estás en el zoom de una zona, incluye su desglose.
+- **Geocodificación por dirección (concentración intra-ciudad)**: si la base
+  trae direcciones, el botón "🌐 Geocodificar direcciones" las convierte en
+  coordenadas con Google Maps, usando la **API key del usuario** (se guarda en
+  el navegador; las direcciones van directo del navegador a Google). Con
+  coordenadas, el mapa hace zoom a la ciudad y muestra **burbujas de
+  concentración por barrio** (~1 km). También detecta columnas `Latitud`/
+  `Longitud` si la base ya viene geocodificada, y permite descargar la base
+  enriquecida para no volver a geocodificar.
+  - Cómo sacar la API key: Google Cloud Console → crear proyecto → activar
+    facturación (US$200/mes de crédito gratis) → habilitar **Maps JavaScript
+    API** y **Geocoding API** → Credenciales → crear Clave de API → (recomendado)
+    restringirla al dominio de Vercel.
 
 > Nota sobre el CP: **derivar el código postal exacto** desde una dirección de
 > texto libre no se puede hacer confiable y offline (requeriría un servicio de

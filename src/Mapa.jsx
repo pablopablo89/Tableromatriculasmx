@@ -55,6 +55,32 @@ function porAnillo(node, cb) {
   for (const child of node) porAnillo(child, cb)
 }
 
+// Ajusta la proyección al conjunto de PUNTOS (para meterse a nivel ciudad
+// cuando ubicamos por dirección). Usa un mínimo de extensión para no sobre-zoomear.
+function ajustarAPuntosProj(puntos, w, h, pad = 40) {
+  const proj = geoMercator().scale(1).translate([0, 0])
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity
+  for (const p of puntos) {
+    const q = proj([p.lng, p.lat])
+    if (!q || !isFinite(q[0]) || !isFinite(q[1])) continue
+    if (q[0] < x0) x0 = q[0]
+    if (q[0] > x1) x1 = q[0]
+    if (q[1] < y0) y0 = q[1]
+    if (q[1] > y1) y1 = q[1]
+  }
+  if (!isFinite(x0)) return null
+  let cx = (x0 + x1) / 2,
+    cy = (y0 + y1) / 2
+  const min = 0.0009 // ~evita zoom infinito con 1 solo punto
+  let dx = Math.max(x1 - x0, min),
+    dy = Math.max(y1 - y0, min)
+  const s = Math.min((w - 2 * pad) / dx, (h - 2 * pad) / dy)
+  return proj.scale(s).translate([w / 2 - s * cx, h / 2 - s * cy])
+}
+
 // Construye el path SVG proyectando cada vértice (planar). No usa geoPath, así
 // que es inmune al winding y al anidado del GeoJSON.
 function pathPlanar(feature, proj) {
@@ -85,6 +111,7 @@ export default function Mapa({
   onSelect,
   seleccion, // null = nacional; {titulo, provincias:[...]} = zoom
   puntos,
+  ajustarAPuntos,
   sinUbicar,
   etiquetaFina,
   onBack,
@@ -120,7 +147,13 @@ export default function Mapa({
     if (!geo || geo === 'error' || !seleccion) return null
     const feats = geo.features.filter((f) => seleccion.provincias.includes(nombre(f)))
     if (!feats.length) return null
-    const projection = ajustarProyeccion(feats, WIDTH, HEIGHT, 30)
+    // Con coordenadas por dirección, hacemos zoom a los puntos (nivel ciudad);
+    // si no, ajustamos a la provincia/estado.
+    let projection = null
+    if (ajustarAPuntos && puntos && puntos.length) {
+      projection = ajustarAPuntosProj(puntos, WIDTH, HEIGHT, 40)
+    }
+    if (!projection) projection = ajustarProyeccion(feats, WIDTH, HEIGHT, 30)
     const paths = feats.map((f) => ({ nombre: nombre(f), d: pathPlanar(f, projection) }))
     const maxN = Math.max(1, ...(puntos || []).map((p) => p.n))
     const pts = (puntos || []).map((p) => {
@@ -128,7 +161,7 @@ export default function Mapa({
       return { ...p, x: xy ? xy[0] : null, y: xy ? xy[1] : null }
     })
     return { paths, pts, maxN }
-  }, [geo, seleccion, puntos])
+  }, [geo, seleccion, puntos, ajustarAPuntos])
 
   if (geo === 'error')
     return <div className="mapa-error">No se pudo cargar el mapa.</div>
