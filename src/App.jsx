@@ -1,21 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import Mapa from './Mapa.jsx'
-import { normalizarEstado, SIN_DATO } from './estados.js'
-import { detectarColumnasCP, extraerCP, agrupar } from './cp.js'
+import { PAISES } from './paises.js'
+import { SIN_DATO, formatoMoneda } from './comun.js'
+import { detectarEnFilas, SINONIMOS } from './campos.js'
 
-// Ciudades que se interpretan como una sola (misma zona metropolitana).
-// CDMX y Estado de México forman el Valle de México.
-const MERGE = { 'Ciudad de México': 'valle', México: 'valle' }
-const GRUPOS = {
-  valle: {
-    titulo: 'Valle de México (CDMX + Edo. de México)',
-    estados: ['Ciudad de México', 'México'],
-  },
-}
-function grupoDe(estado) {
-  const g = MERGE[estado]
-  return g ? GRUPOS[g] : { titulo: estado, estados: [estado] }
+function resolvePrecio(row, col) {
+  if (!col || row[col] == null || row[col] === '') return 0
+  const v = Number(row[col])
+  return isNaN(v) ? 0 : v
 }
 
 function leerArchivo(file) {
@@ -24,9 +17,8 @@ function leerArchivo(file) {
     reader.onload = (e) => {
       try {
         const wb = XLSX.read(e.target.result, { type: 'array' })
-        const nombreHoja =
-          wb.SheetNames.find((n) => /matricul/i.test(n)) || wb.SheetNames[0]
-        resolve(XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { defval: null }))
+        const hoja = wb.SheetNames.find((n) => /matricul/i.test(n)) || wb.SheetNames[0]
+        resolve(XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null }))
       } catch (err) {
         reject(err)
       }
@@ -36,46 +28,49 @@ function leerArchivo(file) {
   })
 }
 
-function detectarColumnaEstado(rows) {
-  if (!rows.length) return null
-  const cols = Object.keys(rows[0])
-  for (const c of ['provincia', 'estado', 'estado_facturacion']) {
-    if (cols.includes(c)) return c
-  }
-  return cols.find((c) => /estado|provincia|entidad/i.test(c)) || null
-}
-
-const money = (n) =>
-  n == null || isNaN(n)
-    ? '—'
-    : n.toLocaleString('es-MX', {
-        style: 'currency',
-        currency: 'MXN',
-        maximumFractionDigits: 0,
-      })
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 export default function App() {
+  const [paisId, setPaisId] = useState('mx')
+  const pais = PAISES[paisId]
+
   const [rows, setRows] = useState(null)
   const [nombreArchivo, setNombreArchivo] = useState('')
   const [error, setError] = useState('')
-  const [colEstado, setColEstado] = useState(null)
-  const [cpCols, setCpCols] = useState([])
-  const [cpCoords, setCpCoords] = useState(null)
+  const [colMayor, setColMayor] = useState(null)
+  const [finoCols, setFinoCols] = useState([])
+  const [finoData, setFinoData] = useState(null)
   const [filtroPrograma, setFiltroPrograma] = useState('Todos')
   const [filtroEstatus, setFiltroEstatus] = useState('Todos')
-  const [estadoActivo, setEstadoActivo] = useState(null)
+  const [activo, setActivo] = useState(null)
   const [seleccion, setSeleccion] = useState(null)
   const inputRef = useRef(null)
 
-  // Carga diferida de coordenadas de CP (solo si la base trae códigos postales).
+  // Al cambiar de país: reiniciar todo y cargar su dataset fino.
   useEffect(() => {
-    if (cpCols.length && !cpCoords) {
-      fetch('/cp-coords.json')
-        .then((r) => r.json())
-        .then(setCpCoords)
-        .catch(() => {})
+    setRows(null)
+    setNombreArchivo('')
+    setError('')
+    setSeleccion(null)
+    setActivo(null)
+    setFinoData(null)
+    let vivo = true
+    fetch(pais.fino.dataset)
+      .then((r) => r.json())
+      .then((d) => vivo && setFinoData({ pais: pais.id, data: d }))
+      .catch(() => {})
+    return () => {
+      vivo = false
     }
-  }, [cpCols, cpCoords])
+  }, [paisId])
+
+  // El geocodificador solo se arma si el dataset cargado es el del país actual
+  // (evita mezclar datos de un país con la lógica de otro durante el cambio).
+  const geocoder = useMemo(
+    () =>
+      finoData && finoData.pais === paisId ? pais.fino.preparar(finoData.data) : null,
+    [finoData, paisId]
+  )
 
   async function cargar(file) {
     if (!file) return
@@ -83,119 +78,123 @@ export default function App() {
     try {
       const data = await leerArchivo(file)
       if (!data.length) return setError('El archivo no tiene filas de datos.')
-      const col = detectarColumnaEstado(data)
+      const col = pais.detectarColumnaMayor(data)
       if (!col)
-        return setError('No encontré una columna de estado/provincia en el archivo.')
-      setColEstado(col)
-      setCpCols(detectarColumnasCP(data))
+        return setError(
+          `No encontré una columna de ${pais.unidadMayor} en el archivo.`
+        )
+      setColMayor(col)
+      setFinoCols(pais.fino.detectarCols(data))
       setRows(data)
       setNombreArchivo(file.name)
       setFiltroPrograma('Todos')
       setFiltroEstatus('Todos')
-      setEstadoActivo(null)
       setSeleccion(null)
+      setActivo(null)
     } catch (err) {
       setError('No pude leer el archivo: ' + err.message)
     }
   }
+
+  // Detección inteligente de columnas de programa, estatus y precio.
+  const campos = useMemo(() => {
+    if (!rows) return { programa: null, estatus: null, precio: null }
+    return {
+      programa: detectarEnFilas(rows, SINONIMOS.programa),
+      estatus: detectarEnFilas(rows, SINONIMOS.estatus),
+      precio: detectarEnFilas(rows, SINONIMOS.precio),
+    }
+  }, [rows])
 
   const opciones = useMemo(() => {
     if (!rows) return { programas: [], estatus: [] }
     const uniq = (col) =>
       [...new Set(rows.map((r) => r[col]).filter((v) => v != null && v !== ''))].sort()
     return {
-      programas: rows[0].tipo_programa !== undefined ? uniq('tipo_programa') : [],
-      estatus: rows[0].Estatus !== undefined ? uniq('Estatus') : [],
+      programas: campos.programa ? uniq(campos.programa) : [],
+      estatus: campos.estatus ? uniq(campos.estatus) : [],
     }
-  }, [rows])
+  }, [rows, campos])
 
   const filas = useMemo(() => {
     if (!rows) return []
     return rows.filter((r) => {
-      if (filtroPrograma !== 'Todos' && r.tipo_programa !== filtroPrograma) return false
-      if (filtroEstatus !== 'Todos' && r.Estatus !== filtroEstatus) return false
+      if (filtroPrograma !== 'Todos' && r[campos.programa] !== filtroPrograma) return false
+      if (filtroEstatus !== 'Todos' && r[campos.estatus] !== filtroEstatus) return false
       return true
     })
-  }, [rows, filtroPrograma, filtroEstatus])
+  }, [rows, filtroPrograma, filtroEstatus, campos])
 
-  const porEstado = useMemo(() => {
+  const porMayor = useMemo(() => {
     const m = new Map()
     for (const r of filas) {
-      const est = normalizarEstado(r[colEstado])
+      const est = pais.normalizar(r[colMayor])
       const prev = m.get(est) || { estado: est, n: 0, ingresos: 0 }
       prev.n += 1
-      const precio = Number(r.precio_con_descuento ?? r.precio_full ?? 0)
-      if (!isNaN(precio)) prev.ingresos += precio
+      prev.ingresos += resolvePrecio(r, campos.precio)
       m.set(est, prev)
     }
     return [...m.values()].sort((a, b) => b.n - a.n)
-  }, [filas, colEstado])
+  }, [filas, colMayor, paisId, campos])
 
-  const conteoPorEstado = useMemo(() => {
+  const conteos = useMemo(() => {
     const o = {}
-    for (const e of porEstado) o[e.estado] = e.n
+    for (const e of porMayor) o[e.estado] = e.n
     return o
-  }, [porEstado])
+  }, [porMayor])
 
-  // CPs (ya extraídos y agregados) por estado normalizado.
-  const cpsPorEstado = useMemo(() => {
-    const m = new Map()
-    if (!cpCols.length) return m
-    for (const r of filas) {
-      const cp = extraerCP(r, cpCols)
-      if (!cp) continue
-      const est = normalizarEstado(r[colEstado])
-      if (!m.has(est)) m.set(est, new Map())
-      const mm = m.get(est)
-      mm.set(cp, (mm.get(cp) || 0) + 1)
-    }
-    return m
-  }, [filas, cpCols, colEstado])
-
-  const conCP = useMemo(() => {
-    if (!cpCols.length) return 0
+  const conFino = useMemo(() => {
+    if (!finoCols.length || !geocoder) return 0
     let c = 0
-    for (const r of filas) if (extraerCP(r, cpCols)) c++
+    for (const r of filas) if (geocoder.geocode(r, finoCols)) c++
     return c
-  }, [filas, cpCols])
+  }, [filas, finoCols, geocoder])
 
-  // Clusters para el modo ciudad (agrupados por cercanía).
-  const clusters = useMemo(() => {
-    if (!seleccion || !cpCoords) return null
-    const puntos = []
-    for (const est of seleccion.estados) {
-      const mm = cpsPorEstado.get(est)
-      if (!mm) continue
-      for (const [cp, n] of mm) {
-        const rec = cpCoords.cp[cp]
-        if (!rec) continue
-        puntos.push({ cp, n, lat: rec[0], lng: rec[1], muni: cpCoords.munis[rec[2]] })
-      }
+  // Puntos del zoom (agrupados por unidad fina: cada CP/ciudad su propio punto).
+  const puntos = useMemo(() => {
+    if (!seleccion || !geocoder || !finoCols.length) return null
+    const m = new Map()
+    for (const r of filas) {
+      if (!seleccion.provincias.includes(pais.normalizar(r[colMayor]))) continue
+      const g = geocoder.geocode(r, finoCols)
+      if (!g) continue
+      const prev =
+        m.get(g.key) || {
+          label: g.label,
+          subtitulo: g.subtitulo,
+          lat: g.lat,
+          lng: g.lng,
+          n: 0,
+          ingresos: 0,
+        }
+      prev.n += 1
+      prev.ingresos += resolvePrecio(r, campos.precio)
+      m.set(g.key, prev)
     }
-    return agrupar(puntos)
-  }, [seleccion, cpCoords, cpsPorEstado])
+    return [...m.values()].sort((a, b) => b.n - a.n)
+  }, [seleccion, geocoder, finoCols, filas, colMayor, paisId, campos])
 
   const total = filas.length
-  const identificadas = porEstado
+  const identificadas = porMayor
     .filter((e) => e.estado !== SIN_DATO)
     .reduce((a, b) => a + b.n, 0)
   const sinDato = total - identificadas
-  const estadosDistintos = porEstado.filter((e) => e.estado !== SIN_DATO).length
-  const ingresoTotal = porEstado.reduce((a, b) => a + b.ingresos, 0)
-  const lider = porEstado.find((e) => e.estado !== SIN_DATO)
+  const distintos = porMayor.filter((e) => e.estado !== SIN_DATO).length
+  const ingresoTotal = porMayor.reduce((a, b) => a + b.ingresos, 0)
+  const lider = porMayor.find((e) => e.estado !== SIN_DATO)
+  const tienePrecio = !!campos.precio
 
-  // Estadísticas del drill actual.
   const drillTotal = seleccion
-    ? porEstado
-        .filter((e) => seleccion.estados.includes(e.estado))
+    ? porMayor
+        .filter((e) => seleccion.provincias.includes(e.estado))
         .reduce((a, b) => a + b.n, 0)
     : 0
-  const drillUbicadas = clusters ? clusters.reduce((a, c) => a + c.n, 0) : 0
+  const drillUbicadas = puntos ? puntos.reduce((a, p) => a + p.n, 0) : 0
   const sinUbicar = drillTotal - drillUbicadas
 
   function abrirDrill(nombre) {
     if (nombre === SIN_DATO) return
-    setSeleccion(grupoDe(nombre))
+    setSeleccion(pais.grupo(nombre))
   }
 
   function onDrop(e) {
@@ -208,18 +207,25 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div>
-          <h1>🗺️ Tablero de Matrículas · México</h1>
+          <h1>🗺️ Tablero de Matrículas</h1>
           <p className="sub">
-            Cargá tu base y mirá de qué estados vienen las matrículas. Hacé clic en
-            un estado para bajar a nivel de código postal. Todo se procesa en tu
-            navegador.
+            Elegí el país, cargá tu base y mirá de qué zonas vienen las
+            matrículas. Hacé clic en {pais.unidadMayor === 'estado' ? 'un' : 'una'}{' '}
+            {pais.unidadMayor} para bajar a nivel de {pais.etiquetaFina}. Todo se
+            procesa en tu navegador.
           </p>
         </div>
-        {rows && (
-          <button className="btn-sec" onClick={() => inputRef.current?.click()}>
-            Cambiar archivo
-          </button>
-        )}
+        <div className="pais-sel">
+          {Object.values(PAISES).map((p) => (
+            <button
+              key={p.id}
+              className={'pais-btn' + (p.id === paisId ? ' activo' : '')}
+              onClick={() => setPaisId(p.id)}
+            >
+              <span className="pais-bandera">{p.bandera}</span> {p.nombre}
+            </button>
+          ))}
+        </div>
       </header>
 
       <input
@@ -241,18 +247,21 @@ export default function App() {
         >
           <div className="drop-inner">
             <div className="drop-icon">📂</div>
-            <p className="drop-title">Arrastrá tu Excel acá o hacé clic</p>
+            <p className="drop-title">
+              Arrastrá tu Excel de {pais.bandera} {pais.nombre} o hacé clic
+            </p>
             <p className="drop-hint">Acepta .xlsx, .xls o .csv.</p>
           </div>
         </div>
       ) : (
         <>
           <div className="filtros">
+            <button className="btn-sec" onClick={() => inputRef.current?.click()}>
+              Cambiar archivo
+            </button>
             <span className="archivo">
               📄 {nombreArchivo} · {rows.length} filas
-              {cpCols.length > 0 && (
-                <> · CP en columna «{cpCols[0]}»</>
-              )}
+              {finoCols.length > 0 && <> · {pais.etiquetaFina} en «{finoCols[0]}»</>}
             </span>
             {opciones.programas.length > 0 && (
               <label>
@@ -286,75 +295,85 @@ export default function App() {
 
           <div className="kpis">
             <Kpi label="Matrículas (filtradas)" valor={total} />
-            <Kpi label="Estados distintos" valor={estadosDistintos} />
+            <Kpi label={`${cap(pais.unidadMayor)}s con matrículas`} valor={distintos} />
             <Kpi
-              label="Estado líder"
+              label={`${cap(pais.unidadMayor)} líder`}
               valor={lider ? lider.estado : '—'}
               sub={
-                lider
-                  ? `${lider.n} matrículas (${Math.round((lider.n / total) * 100)}%)`
-                  : ''
+                lider ? `${lider.n} matrículas (${Math.round((lider.n / total) * 100)}%)` : ''
               }
             />
-            <Kpi label="Ingresos (con descuento)" valor={money(ingresoTotal)} />
-            {cpCols.length > 0 && (
+            {tienePrecio && (
+              <Kpi label="Ingresos" valor={formatoMoneda(ingresoTotal, pais.moneda)} />
+            )}
+            {finoCols.length > 0 && (
               <Kpi
-                label="Con código postal"
-                valor={`${conCP} / ${total}`}
-                sub={conCP === 0 ? 'la columna CP está vacía' : ''}
-                alerta={conCP === 0}
+                label={`Con ${pais.etiquetaFina}`}
+                valor={`${conFino} / ${total}`}
+                sub={conFino === 0 ? 'esa columna está vacía' : ''}
+                alerta={conFino === 0}
               />
             )}
-            {sinDato > 0 && <Kpi label="Sin estado identificado" valor={sinDato} alerta />}
+            {sinDato > 0 && (
+              <Kpi label={`Sin ${pais.unidadMayor} identificado`} valor={sinDato} alerta />
+            )}
           </div>
 
           <div className="grid">
             <div className="card mapa-card">
               <h2>
-                {seleccion ? 'Detalle por código postal' : 'Distribución geográfica'}
+                {seleccion
+                  ? `Detalle por ${pais.etiquetaFina}`
+                  : 'Distribución geográfica'}
               </h2>
               <Mapa
-                conteos={conteoPorEstado}
-                estadoActivo={estadoActivo}
-                onHover={setEstadoActivo}
+                mapaUrl={pais.mapa}
+                propNombre={pais.propNombre}
+                moneda={pais.moneda}
+                etiquetaFina={pais.etiquetaFina}
+                conteos={conteos}
+                activo={activo}
+                onHover={setActivo}
                 onSelect={abrirDrill}
                 seleccion={seleccion}
-                clusters={clusters}
+                puntos={puntos}
                 sinUbicar={sinUbicar}
                 onBack={() => setSeleccion(null)}
               />
             </div>
 
             <div className="card tabla-card">
-              <h2>Ranking por estado</h2>
+              <h2>Ranking por {pais.unidadMayor}</h2>
               <div className="tabla-scroll">
                 <table>
                   <thead>
                     <tr>
                       <th>#</th>
-                      <th>Estado</th>
+                      <th>{cap(pais.unidadMayor)}</th>
                       <th className="num">Matrículas</th>
                       <th className="num">%</th>
-                      <th className="num">Ingresos</th>
+                      {tienePrecio && <th className="num">Ingresos</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {porEstado.map((e, i) => (
+                    {porMayor.map((e, i) => (
                       <tr
                         key={e.estado}
                         className={
-                          (e.estado === estadoActivo ? 'activo ' : '') +
+                          (e.estado === activo ? 'activo ' : '') +
                           (e.estado === SIN_DATO ? 'sindato ' : 'clickable')
                         }
-                        onMouseEnter={() => setEstadoActivo(e.estado)}
-                        onMouseLeave={() => setEstadoActivo(null)}
+                        onMouseEnter={() => setActivo(e.estado)}
+                        onMouseLeave={() => setActivo(null)}
                         onClick={() => abrirDrill(e.estado)}
                       >
                         <td>{e.estado === SIN_DATO ? '—' : i + 1}</td>
                         <td>{e.estado}</td>
                         <td className="num">{e.n}</td>
                         <td className="num">{Math.round((e.n / total) * 100)}%</td>
-                        <td className="num">{money(e.ingresos)}</td>
+                        {tienePrecio && (
+                          <td className="num">{formatoMoneda(e.ingresos, pais.moneda)}</td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -364,9 +383,11 @@ export default function App() {
           </div>
 
           <p className="pie">
-            {cpCols.length === 0
-              ? 'Tip: si tu base incluye una columna de código postal, el tablero la detecta sola y habilita el mapa por zonas al hacer clic en un estado.'
-              : 'Tip: hacé clic en un estado (mapa o tabla) para ver las zonas por código postal.'}
+            {finoCols.length === 0
+              ? `Tip: si tu base incluye una columna de ${pais.etiquetaFina}, el tablero la detecta sola y habilita el detalle por zonas al hacer clic.`
+              : `Tip: hacé clic en ${
+                  pais.unidadMayor === 'estado' ? 'un estado' : 'una provincia'
+                } (mapa o tabla) para ver el detalle por ${pais.etiquetaFina}.`}
           </p>
         </>
       )}

@@ -4,8 +4,8 @@
   --ink: #0f172a;
   --muted: #64748b;
   --line: #e2e8f0;
-  --brand: #1e3a8a;
-  --brand-soft: #dbeafe;
+  --brand: #0e7490;
+  --brand-soft: #cffafe;
   --alerta: #b45309;
   --alerta-bg: #fef3c7;
 }
@@ -45,7 +45,7 @@ h1 {
 .sub {
   margin: 0;
   color: var(--muted);
-  max-width: 640px;
+  max-width: 660px;
   line-height: 1.5;
 }
 
@@ -62,6 +62,40 @@ h1 {
 .btn-sec:hover {
   border-color: var(--brand);
   color: var(--brand);
+}
+
+/* Selector de país */
+.pais-sel {
+  display: flex;
+  gap: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 4px;
+}
+.pais-btn {
+  background: transparent;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pais-btn:hover {
+  color: var(--ink);
+}
+.pais-btn.activo {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+.pais-bandera {
+  font-size: 16px;
 }
 
 .error {
@@ -210,7 +244,7 @@ h1 {
   filter: brightness(0.94);
 }
 
-/* Drill-down (modo ciudad) */
+/* Drill-down (modo provincia) */
 .drill-head {
   display: flex;
   align-items: center;
@@ -232,22 +266,32 @@ h1 {
   margin: 8px 0 0;
   line-height: 1.45;
 }
-.cluster {
+.punto {
   cursor: pointer;
   transition: fill-opacity 0.15s;
 }
-.cluster:hover {
-  fill-opacity: 0.95;
+.punto:hover {
+  fill-opacity: 1;
 }
-.cluster-num {
-  font-size: 11px;
+.punto-num {
+  font-size: 10.5px;
   font-weight: 700;
   text-anchor: middle;
   dominant-baseline: middle;
   fill: #fff;
   pointer-events: none;
 }
-.tooltip-cps {
+.punto-label {
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 2.5px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.tooltip-sub {
   color: #cbd5e1;
   font-size: 12px;
 }
